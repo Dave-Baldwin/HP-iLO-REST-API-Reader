@@ -1,20 +1,59 @@
 import logging
+import configparser
 import json
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from paho.mqtt import client as mqtt_client
 import time
 from datetime import datetime, date, timezone
+import os
 from sys import exit
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 logging.basicConfig(filename='iLOQueryReport.log', encoding='utf-8', level=logging.INFO)
 
-iLOIP = "10.10.10.10"
-broker = "10.10.10.11"
-port = 1883
+# Read configuration
+config_file = os.path.join(os.path.dirname(__file__), "inputs.ini")
+config = configparser.ConfigParser()
+config.read(config_file)
+
+# Get values from config.ini file
+iloUsername = config["DEFAULT"]["iloUsername"]
+iloPassword = config["DEFAULT"]["iloPassword"]
+iLOIP = config["DEFAULT"]["iloIP"]
+port = config["DEFAULT"].getint("mqttPort")  # Convert to integer if needed
+broker = config["DEFAULT"]["mqttBrokerIP"]
+siteName = config["DEFAULT"]["siteName"]
+
 client_id = f'python-mqtt-iLOReporter'
+
+ServerHealthTopic = siteName + "Liberty/Network/HPServer/HealthSummaryOK"
+ServerWattsTopic = siteName + "/Network/HPServer/PowerConsumptionW"
+ServerPowerSuppliesTopic = siteName + "/Network/HPServer/PowerSuppliesOK"
+ServerDiskDrivesTopic = siteName + "/Network/HPServer/DiskDrivesOK"
+ServerProcessorsTopic = siteName + "/Network/HPServer/ProcessorsOK"
+ServerLogicalDrivesTopic = siteName + "/Network/HPServer/LogicalDrivesOK"
+ServerArrayControllerTopic = siteName + "/Network/HPServer/ArrayControllerOK"
+ServerStorageEnclosureTopic = siteName + "/Network/HPServer/StorageEnclosureOK"
+ServerFansTopic = siteName + "/Network/HPServer/FansOK"
+ServerTempsTopic = siteName + "/Network/HPServer/TempsOK"
+ServerMemoryTopic = siteName + "/Network/HPServer/MemoryOK"
+ServerMemoryOtherTopic = siteName + "/Network/HPServer/MemoryOtherStatus"
+QuerySuccessTopic = siteName + "/Network/HPServer/iLOQueryOK"
+QueryDateTimeTopic = siteName + "/Network/HPServer/LastiLOQueryDateTime"
+
+enclOK = False
+memOK = False
+processorsOK = False
+logDrivesOK = False
+diskDrivesOK = False
+controllerOK = False
+tempsOK = False
+fansOK = False
+chassisOK = False
+powerSupplOK = False
+
 
 logging.info("=========== " + datetime.now().strftime("%m/%d/%Y") + " ===============")
 logging.info(datetime.now().strftime("%H:%M:%S") + " || Beginning ILO query of " + iLOIP + "..")
@@ -24,7 +63,8 @@ scriptOK = True
 ## this may be set false below based on any number of abnormal conditions, HTTP return values not as expected, etc.
 
 ## initialize MQTT client connection to broker
-client = mqtt_client.Client(client_id)
+client = mqtt_client.Client(client_id)    ## updated for newer paho.mqtt version?
+##client = mqtt_client.Client(client_id, callback_api_version=mqtt_client.CallbackAPIVersion.VERSION2)
 ##logging.info("MQTT client ID set")
 ##client.username_pw_set(username, password)
 ##client.on_connect = on_connect
@@ -56,7 +96,7 @@ else:
     ## POST Request
 
     headers = {'Content-type': 'application/json'}
-    data = {'Password': 'view','UserName': 'view'}
+    data = {'Password': iloPassword,'UserName': iloUsername}
 
     r = requests.post( 
         "https://" + iLOIP + "/redfish/v1/Sessions/", 
@@ -73,7 +113,7 @@ else:
         scriptOK = False
         logging.info("Problem with initial login")
     else:
-        logging.info("Initial login returned 201, OK.")
+        ##logging.info("Initial login returned 201, OK.")
 
         ##if response == "<Response [201]>":
         ## response.text - not helpful, just shows Messages body from iLO
@@ -94,8 +134,8 @@ else:
         ## new headers for all successive requests includes X-Auth-Token
         headers = {'Content-type': 'application/json','X-Auth-Token': authToken}
 
-        logging.info("iLO Status information: ")
-        logging.info("------------------------")
+        ##logging.info("iLO Status information: ")
+        ##logging.info("------------------------")
 
 
         #################################################
@@ -130,15 +170,16 @@ else:
 
             if (ps1Status != "OK") or (ps2Status != "OK"):
                 powerSupplOK = False
+                logging.info("Power Supplies NOT OK, ")
             else:
                 powerSupplOK = True
 
             currPowerWatts = powerTree['PowerConsumedWatts']
-            logging.info("Server Power consumption in Watts: ")
-            logging.info(currPowerWatts)
+            #logging.info("Server Power consumption in Watts: ")
+            #logging.info(currPowerWatts)
 
-        logging.info("Power supplies OK: ")
-        logging.info(powerSupplOK)
+        #logging.info("Power supplies OK: ")
+        #logging.info(powerSupplOK)
 
         #################################################
         ###### CHASSIS INFO #############################
@@ -167,8 +208,8 @@ else:
 
             chassisTree = json.loads(r2.text)
             chassisStatus = chassisTree["Status"]["Health"]
-            logging.info("Chassis status: ")
-            logging.info(chassisStatus)
+            #logging.info("Chassis status: ")
+            #logging.info(chassisStatus)
             if chassisStatus != "OK":
                 chassisOK = False
 
@@ -200,9 +241,10 @@ else:
 
             for x in range(7):
                 if "Health" in thermalTree["Fans"][x]["Status"]:
-                    ##logging.info("Health key exists in JSON data")
+                    #logging.info("Health key exists in JSON data")
                     if thermalTree["Fans"][x]["Status"]["Health"] != "OK":
                         fansOK = False
+                        logging.info("Fan " + str(x+1) + " NOT OK, ")
                     #else:
                         #logging.info("Fan " + str(x+1) + " OK, ")
                 #else:
@@ -212,8 +254,8 @@ else:
                     #logging.info(" is absent")
 
             ##logging.info("")
-            logging.info("Fans OK: ")
-            logging.info(fansOK)
+            #logging.info("Fans OK: ")
+            #logging.info(fansOK)
 
 
             ## begin by assuming all temperatures are OK
@@ -221,9 +263,10 @@ else:
 
             for x in range(41):
                 if "Health" in thermalTree["Temperatures"][x]["Status"]:
-                    ##logging.info("Health key exists in JSON data")
+                    #logging.info("Health key exists in JSON data")
                     if thermalTree["Temperatures"][x]["Status"]["Health"] != "OK":
                         tempsOK = False
+                        logging.info("Temp " + str(x+1) + " NOT OK, ")
                     #else:
                         #logging.info("Temp " + str(x+1) + " OK, ")
                 #else:
@@ -232,8 +275,8 @@ else:
                     #logging.info(" is absent")
 
             ##logging.info("")
-            logging.info("Temps OK: ")
-            logging.info(tempsOK)
+            #logging.info("Temps OK: ")
+            #logging.info(tempsOK)
 
         ##ps1Status = chassisTree['PowerSupplies'][0]['Status']['Health']
 
@@ -264,16 +307,17 @@ else:
             controllerOK = True
 
             if "Health" in controllerTree["Status"]:
-                ##logging.info("Health key exists in JSON data")
+                #logging.info("Health key exists in JSON data")
                 if controllerTree["Status"]["Health"] != "OK":
                     controllerOK = False
+                    logging.info("Array Controllers NOT OK, ")
             else:
                 logging.info("Key doesn't exist in JSON data")
                 ## this SHOULD exist, mark OK as false
                 controllerOK = False
                     
-            logging.info("Smart Storage Controller OK: ")
-            logging.info(controllerOK)
+            #logging.info("Smart Storage Controller OK: ")
+            #logging.info(controllerOK)
 
 
         #################################################
@@ -327,9 +371,10 @@ else:
 
                 indivDriveTree = json.loads(rDiskDrive.text)
                 if "Health" in indivDriveTree["Status"]:
-                    ##logging.info("Health key exists in JSON data")
+                    #logging.info("Health key exists in JSON data")
                     if indivDriveTree["Status"]["Health"] != "OK":
                         diskDrivesOK = False
+                        logging.info("Disk Drive Status not OK!, ")
                     #else:
                         #logging.info("Disk drive " + str(x+1) + " OK, ")
                 else:
@@ -338,8 +383,8 @@ else:
                     diskDrivesOK = False
 
             ##logging.info("")
-            logging.info("Disk Drives OK: ")
-            logging.info(diskDrivesOK)
+            #logging.info("Disk Drives OK: ")
+            #logging.info(diskDrivesOK)
 
 
         #################################################
@@ -393,7 +438,7 @@ else:
 
                 indivLogDriveTree = json.loads(rLogDrive.text)
                 if "Health" in indivLogDriveTree["Status"]:
-                    ##logging.info("Health key exists in JSON data")
+                    #logging.info("Health key exists in JSON data")
                     if indivDriveTree["Status"]["Health"] != "OK":
                         logDrivesOK = False
                     #else:
@@ -404,8 +449,8 @@ else:
                     logDrivesOK = False
 
             ##logging.info("")
-            logging.info("Logical Drives OK: ")
-            logging.info(logDrivesOK)
+            #logging.info("Logical Drives OK: ")
+            #logging.info(logDrivesOK)
 
         #################################################
         ###### PROCESSORS INFO ##########################
@@ -458,7 +503,7 @@ else:
 
                 procTree = json.loads(rProc.text)
                 if "Health" in procTree["Status"]:
-                    ##logging.info("Health key exists in JSON data")
+                    #logging.info("Health key exists in JSON data")
                     if procTree["Status"]["Health"] != "OK":
                         processorsOK = False
                     #else:
@@ -469,8 +514,8 @@ else:
                     processorsOK = False
 
             ##logging.info("")
-            logging.info("Processors OK: ")
-            logging.info(processorsOK)
+            #logging.info("Processors OK: ")
+            #logging.info(processorsOK)
 
         #################################################
         ###### MEMORY INFO ##############################
@@ -525,15 +570,15 @@ else:
 
                 indivMemTree = json.loads(rMem.text)
                 if "DIMMStatus" in indivMemTree:
-                    ##logging.info("DimmStatus key exists in JSON data")
+                    #logging.info("DimmStatus key exists in JSON data")
                     if indivMemTree["DIMMStatus"] != "GoodInUse":
-                        ##logging.info("Memory " + str(x+1) + " OK, ")
+                        #logging.info("Memory " + str(x+1) + " OK, ")
                         if indivMemTree["DIMMStatus"] == "Other":
                             memOtherStatus = True
                             logging.info("**Memory " + str(x+1) + " reports OTHER status**")
                             ## this seems acceptable, we'll tell openHAB that something is a bit off ..
                         else:
-                            ##logging.info("")
+                            logging.info("")
                             logging.info("**Memory " + str(x+1) + " NOT OK***")
                             logging.info(indivMemTree["DIMMStatus"])
                             
@@ -545,10 +590,10 @@ else:
                     memOK = False
                     
             ##logging.info("")
-            logging.info("Memory OK: ")
-            logging.info(memOK)
-            logging.info("Memory reporting OTHER status?: ")
-            logging.info(memOtherStatus)
+            #logging.info("Memory OK: ")
+            #logging.info(memOK)
+            #logging.info("Memory reporting OTHER status?: ")
+            #logging.info(memOtherStatus)
 
         #################################################
         ###### STORAGE ENCLOSURES INFO ##################
@@ -577,7 +622,7 @@ else:
             enclOK = True
 
             enclCount = enclsTree["Members@odata.count"]
-            ##logging.info(enclCount)
+            #logging.info(enclCount)
 
             ## if enclosures count isn't 1, we have a problem!
             if enclCount != 1:
@@ -586,7 +631,7 @@ else:
             ## cycle through all 'Members'
             for x in range(enclCount):     ## 1 items, so 0 -> 0 - this is how RANGE works!
                 enlcURL = "https://" + iLOIP + enclsTree["Members"][x]["@odata.id"]
-                ##logging.info(enlcURL)
+                #logging.info(enlcURL)
                 rEncl = requests.get(
                     enlcURL, 
                     headers=headers,
@@ -604,21 +649,21 @@ else:
                     
                     indivEnclTree = json.loads(rEncl.text)
                     if "Health" in indivEnclTree["Status"]:
-                        ##logging.info("Health key exists in JSON data")
+                        #logging.info("Health key exists in JSON data")
                         if indivEnclTree["Status"]["Health"] != "OK":
                             enclOK = False
                             ##logging.info("")
                             logging.info("**Enclosure " + str(x+1) + " NOT OK***")
-                        ##else:
-                            ##logging.info("Enclosure " + str(x+1) + " OK, ")
+                        #else:
+                            #logging.info("Enclosure " + str(x+1) + " OK, ")
                     else:
                         logging.info("Key doesn't exist in JSON data")
                         ## this SHOULD exist, mark OK as false
                         enclOK = False
 
             ##logging.info("")
-            logging.info("Storage enclosures OK: ")
-            logging.info(enclOK)
+            #logging.info("Storage enclosures OK: ")
+            #logging.info(enclOK)
 
         #################################################
         ### END iLO LOGIN SESSION #######################
@@ -647,21 +692,6 @@ else:
             logging.info("Terminate iLO API session returned 200, OK.")
 
         logging.info(datetime.now().strftime("%H:%M:%S") + " || ILO queries complete.")
-
-        ServerHealthTopic = "Root/Network/HPServer/HealthSummaryOK"
-        ServerWattsTopic = "Root/Network/HPServer/PowerConsumptionW"
-        ServerPowerSuppliesTopic = "Root/Network/HPServer/PowerSuppliesOK"
-        ServerDiskDrivesTopic = "Root/Network/HPServer/DiskDrivesOK"
-        ServerProcessorsTopic = "Root/Network/HPServer/ProcessorsOK"
-        ServerLogicalDrivesTopic = "Root/Network/HPServer/LogicalDrivesOK"
-        ServerArrayControllerTopic = "Root/Network/HPServer/ArrayControllerOK"
-        ServerStorageEnclosureTopic = "Root/Network/HPServer/StorageEnclosureOK"
-        ServerFansTopic = "Root/Network/HPServer/FansOK"
-        ServerTempsTopic = "Root/Network/HPServer/TempsOK"
-        ServerMemoryTopic = "Root/Network/HPServer/MemoryOK"
-        ServerMemoryOtherTopic = "Root/Network/HPServer/MemoryOtherStatus"
-        iLOQuerySuccessTopic = "Root/Network/HPServer/iLOQueryOK"
-        iLOQueryDateTimeTopic = "Root/Network/HPServer/LastiLOQueryDateTime"
         
 
         if (enclOK and memOK and processorsOK and logDrivesOK and diskDrivesOK and controllerOK and tempsOK and fansOK and chassisOK and powerSupplOK):
@@ -688,77 +718,77 @@ else:
         ## publish other values to broker
         resultRpt = client.publish(ServerWattsTopic, currPowerWatts)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Power Consumption")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Power Consumption: " + str(currPowerWatts))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Health Summary via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerPowerSuppliesTopic, powerSupplOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Power Supplies Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Power Supplies Status: " + str(powerSupplOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Power Supplies Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerDiskDrivesTopic, diskDrivesOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Disk Drives Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Disk Drives Status: " + str(diskDrivesOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Disk Drives Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerProcessorsTopic, processorsOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Processors Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Processors Status: " + str(processorsOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Processors Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerLogicalDrivesTopic, logDrivesOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Logical Drives Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Logical Drives Status:" + str(logDrivesOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Logical Drives Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerArrayControllerTopic, controllerOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Array Controller Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Array Controller Status:" + str(controllerOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Array Controller Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerStorageEnclosureTopic, enclOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Array Controller Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Array Controller Status: " + str(enclOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Array Controller Status via MQTT")
         time.sleep(0.1)
        
         resultRpt = client.publish(ServerFansTopic, fansOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Fans Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Fans Status: " + str(fansOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Fans Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerTempsTopic, tempsOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Temperatures Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Temperatures Status: " + str(tempsOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Temperatures Status via MQTT")
         time.sleep(0.1)
         
         resultRpt = client.publish(ServerMemoryTopic, memOK)
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Memory Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Memory Status: " + str(memOK))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Memory Status via MQTT")
         time.sleep(0.1)
 
         resultRpt = client.publish(ServerMemoryOtherTopic, memOtherStatus) 
         if resultRpt[0] == 0:
-           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Memory OTHER Status")
+           logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Memory OTHER Status: " + str(memOtherStatus))
         else:
             logging.info(datetime.now().strftime("%H:%M:%S") + " || PROBLEM reporting iLO Memory OTHER report Status via MQTT")
         time.sleep(0.1)
@@ -767,7 +797,7 @@ else:
 
     ## last overall status report via MQTT
     ## report overall iLO query status to broker
-    resultRpt = client.publish(iLOQuerySuccessTopic, scriptOK)
+    resultRpt = client.publish(QuerySuccessTopic, scriptOK)
     if resultRpt[0] == 0:
        logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: Overall iLO Query Success/Status")
     else:
@@ -775,7 +805,7 @@ else:
     time.sleep(0.1)
 
     ## report date-time of last query/report via MQTT
-    resultRpt = client.publish(iLOQueryDateTimeTopic, datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
+    resultRpt = client.publish(QueryDateTimeTopic, datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
     if resultRpt[0] == 0:
        logging.info(datetime.now().strftime("%H:%M:%S") + " || MQTT Report OK: iLO Query DateTime stamp")
     else:
