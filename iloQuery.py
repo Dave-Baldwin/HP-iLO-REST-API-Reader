@@ -28,7 +28,7 @@ siteName = config["DEFAULT"]["siteName"]
 
 client_id = f'python-mqtt-iLOReporter'
 
-ServerHealthTopic = siteName + "Liberty/Network/HPServer/HealthSummaryOK"
+ServerHealthTopic = siteName + "/Network/HPServer/HealthSummaryOK"
 ServerWattsTopic = siteName + "/Network/HPServer/PowerConsumptionW"
 ServerPowerSuppliesTopic = siteName + "/Network/HPServer/PowerSuppliesOK"
 ServerDiskDrivesTopic = siteName + "/Network/HPServer/DiskDrivesOK"
